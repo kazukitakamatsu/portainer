@@ -24,7 +24,8 @@ function EndpointController(
   Authentication,
   SettingsService,
   ModalService,
-  StateManager
+  StateManager,
+  OpenAMTService
 ) {
   const DEPLOYMENT_TABS = {
     SWARM: 'swarm',
@@ -204,6 +205,24 @@ function EndpointController(
         }
       }
     );
+
+    // AMT info...
+    EndpointService.updateEndpoint(endpoint.Id, payload).then(
+      function success() {
+        Notifications.success('Environment updated', $scope.endpoint.Name);
+        EndpointProvider.setEndpointPublicURL(endpoint.PublicURL);
+        $state.go('portainer.endpoints', {}, { reload: true });
+      },
+      function error(err) {
+        Notifications.error('Failure', err, 'Unable to update environment');
+        $scope.state.actionInProgress = false;
+      },
+      function update(evt) {
+        if (evt.upload) {
+          $scope.state.uploadInProgress = evt.upload;
+        }
+      }
+    );
   };
 
   function decodeEdgeKey(key) {
@@ -247,11 +266,12 @@ function EndpointController(
   async function initView() {
     return $async(async () => {
       try {
-        const [endpoint, groups, tags, settings] = await Promise.all([
+        const [endpoint, groups, tags, settings, amtinfo] = await Promise.all([
           EndpointService.endpoint($transition$.params().id),
           GroupService.groups(),
           TagService.tags(),
           SettingsService.settings(),
+          OpenAMTService.info($transition$.params().id),
         ]);
 
         if (endpoint.URL.indexOf('unix://') === 0 || endpoint.URL.indexOf('npipe://') === 0) {
@@ -267,6 +287,11 @@ function EndpointController(
           $scope.randomEdgeID = uuidv4();
 
           $scope.state.availableEdgeAgentCheckinOptions[0].key += ` (${settings.EdgeAgentCheckinInterval} seconds)`;
+        }
+
+        if (settings.FeatureFlagSettings && settings.FeatureFlagSettings['open-amt']) {
+          endpoint.ManagementInfo = amtinfo.Text;
+          //"Querying... (docker run --rm -it --privileged ptrrd/openamt:rpc-go amtinfo)"
         }
 
         $scope.endpoint = endpoint;

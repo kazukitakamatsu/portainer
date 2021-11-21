@@ -209,8 +209,10 @@ func (server *Server) Start() error {
 	if err != nil {
 		return err
 	}
+
 	intelHandler.OpenAMTService = server.OpenAMTService
 	intelHandler.DataStore = server.DataStore
+	intelHandler.DockerClientFactory = server.DockerClientFactory
 
 	var stackHandler = stacks.NewHandler(requestBouncer)
 	stackHandler.DataStore = server.DataStore
