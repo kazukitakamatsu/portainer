@@ -290,8 +290,8 @@ function EndpointController(
         }
 
         if (settings.FeatureFlagSettings && settings.FeatureFlagSettings['open-amt']) {
-          endpoint.ManagementInfo = amtinfo.Text;
-          //"Querying... (docker run --rm -it --privileged ptrrd/openamt:rpc-go amtinfo)"
+          endpoint.ManagementInfoRaw = amtinfo.Text;
+          endpoint.ManagementInfo = JSON.parse(amtinfo.Text);
         }
 
         $scope.endpoint = endpoint;

@@ -68,13 +68,14 @@ func (handler *Handler) OpenAMTHostInfo(w http.ResponseWriter, r *http.Request) 
 	// pull the image so we can check if there's a new one
 	imagename := "ptrrd/openamt:rpc-go"
 	containerName := "openamt-rpc-go"
+	cmdline := []string{"amtinfo", "--json"}
 
 	if err := pullImage(ctx, docker, imagename); err != nil {
 		return &httperror.HandlerError{StatusCode: http.StatusInternalServerError,
 			Message: "Could not pull image from registry", Err: err}
 	}
 
-	output, err := runContainer(ctx, docker, imagename, containerName, []string{"amtinfo"})
+	output, err := runContainer(ctx, docker, imagename, containerName, cmdline)
 	if err != nil {
 		return &httperror.HandlerError{StatusCode: http.StatusInternalServerError,
 			Message: "Could not run container", Err: err}
