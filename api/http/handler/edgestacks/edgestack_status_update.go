@@ -8,7 +8,7 @@ import (
 	httperror "github.com/portainer/libhttp/error"
 	"github.com/portainer/libhttp/request"
 	"github.com/portainer/libhttp/response"
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 	bolterrors "github.com/portainer/portainer/api/bolt/errors"
 )
 
@@ -23,7 +23,7 @@ func (payload *updateStatusPayload) Validate(r *http.Request) error {
 		return errors.New("Invalid status")
 	}
 	if payload.EndpointID == nil {
-		return errors.New("Invalid EndpointID")
+		return errors.New("Invalid EnvironmentID")
 	}
 	if *payload.Status == portainer.StatusError && govalidator.IsNull(payload.Error) {
 		return errors.New("Error message is mandatory when status is error")
@@ -31,6 +31,19 @@ func (payload *updateStatusPayload) Validate(r *http.Request) error {
 	return nil
 }
 
+// @id EdgeStackStatusUpdate
+// @summary Update an EdgeStack status
+// @description Authorized only if the request is done by an Edge Environment(Endpoint)
+// @tags edge_stacks
+// @accept json
+// @produce json
+// @param id path string true "EdgeStack Id"
+// @success 200 {object} portainer.EdgeStack
+// @failure 500
+// @failure 400
+// @failure 404
+// @failure 403
+// @router /edge_stacks/{id}/status [put]
 func (handler *Handler) edgeStackStatusUpdate(w http.ResponseWriter, r *http.Request) *httperror.HandlerError {
 	stackID, err := request.RetrieveNumericRouteVariableValue(r, "id")
 	if err != nil {
@@ -52,14 +65,14 @@ func (handler *Handler) edgeStackStatusUpdate(w http.ResponseWriter, r *http.Req
 
 	endpoint, err := handler.DataStore.Endpoint().Endpoint(portainer.EndpointID(*payload.EndpointID))
 	if err == bolterrors.ErrObjectNotFound {
-		return &httperror.HandlerError{http.StatusNotFound, "Unable to find an endpoint with the specified identifier inside the database", err}
+		return &httperror.HandlerError{http.StatusNotFound, "Unable to find an environment with the specified identifier inside the database", err}
 	} else if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find an endpoint with the specified identifier inside the database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find an environment with the specified identifier inside the database", err}
 	}
 
 	err = handler.requestBouncer.AuthorizedEdgeEndpointOperation(r, endpoint)
 	if err != nil {
-		return &httperror.HandlerError{http.StatusForbidden, "Permission denied to access endpoint", err}
+		return &httperror.HandlerError{http.StatusForbidden, "Permission denied to access environment", err}
 	}
 
 	stack.Status[*payload.EndpointID] = portainer.EdgeStackStatus{

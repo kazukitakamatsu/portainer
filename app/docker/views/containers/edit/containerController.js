@@ -21,7 +21,6 @@ angular.module('portainer.docker').controller('ContainerController', [
   'ImageService',
   'HttpRequestHelper',
   'Authentication',
-  'StateManager',
   'endpoint',
   function (
     $q,
@@ -42,9 +41,10 @@ angular.module('portainer.docker').controller('ContainerController', [
     ImageService,
     HttpRequestHelper,
     Authentication,
-    StateManager,
     endpoint
   ) {
+    $scope.endpoint = endpoint;
+    $scope.isAdmin = Authentication.isAdmin();
     $scope.activityTime = 0;
     $scope.portBindings = [];
     $scope.displayRecreateButton = false;
@@ -58,7 +58,13 @@ angular.module('portainer.docker').controller('ContainerController', [
       recreateContainerInProgress: false,
       joinNetworkInProgress: false,
       leaveNetworkInProgress: false,
+      pullImageValidity: false,
     };
+
+    $scope.setPullImageValidity = setPullImageValidity;
+    function setPullImageValidity(validity) {
+      $scope.state.pullImageValidity = validity;
+    }
 
     $scope.updateRestartPolicy = updateRestartPolicy;
 
@@ -111,6 +117,7 @@ angular.module('portainer.docker').controller('ContainerController', [
             });
           }
 
+          $scope.container.Config.Env = _.sortBy($scope.container.Config.Env, _.toLower);
           const inSwarm = $scope.container.Config.Labels['com.docker.swarm.service.id'];
           const autoRemove = $scope.container.HostConfig.AutoRemove;
           const admin = Authentication.isAdmin();
@@ -118,6 +125,7 @@ angular.module('portainer.docker').controller('ContainerController', [
             allowContainerCapabilitiesForRegularUsers,
             allowHostNamespaceForRegularUsers,
             allowDeviceMappingForRegularUsers,
+            allowSysctlSettingForRegularUsers,
             allowBindMountsForRegularUsers,
             allowPrivilegedModeForRegularUsers,
           } = endpoint.SecuritySettings;
@@ -126,6 +134,7 @@ angular.module('portainer.docker').controller('ContainerController', [
             !allowContainerCapabilitiesForRegularUsers ||
             !allowBindMountsForRegularUsers ||
             !allowDeviceMappingForRegularUsers ||
+            !allowSysctlSettingForRegularUsers ||
             !allowHostNamespaceForRegularUsers ||
             !allowPrivilegedModeForRegularUsers;
 
@@ -307,7 +316,7 @@ angular.module('portainer.docker').controller('ContainerController', [
         if (!pullImage) {
           return $q.when();
         }
-        return RegistryService.retrievePorRegistryModelFromRepository(container.Config.Image).then(function pullImage(registryModel) {
+        return RegistryService.retrievePorRegistryModelFromRepository(container.Config.Image, endpoint.Id).then((registryModel) => {
           return ImageService.pullImage(registryModel, true);
         });
       }

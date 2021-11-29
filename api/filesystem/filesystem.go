@@ -9,7 +9,7 @@ import (
 	"io/ioutil"
 
 	"github.com/gofrs/uuid"
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 
 	"io"
 	"os"
@@ -31,6 +31,8 @@ const (
 	ComposeStorePath = "compose"
 	// ComposeFileDefaultName represents the default name of a compose file.
 	ComposeFileDefaultName = "docker-compose.yml"
+	// ManifestFileDefaultName represents the default name of a k8s manifest file.
+	ManifestFileDefaultName = "k8s-deployment.yml"
 	// EdgeStackStorePath represents the subfolder where edge stack files are stored in the file store folder.
 	EdgeStackStorePath = "edge_stacks"
 	// PrivateKeyFile represents the name on disk of the file containing the private key.
@@ -41,6 +43,8 @@ const (
 	BinaryStorePath = "bin"
 	// EdgeJobStorePath represents the subfolder where schedule files are stored.
 	EdgeJobStorePath = "edge_jobs"
+	// DockerConfigPath represents the subfolder where docker configuration is stored.
+	DockerConfigPath = "docker_config"
 	// ExtensionRegistryManagementStorePath represents the subfolder where files related to the
 	// registry management extension are stored.
 	ExtensionRegistryManagementStorePath = "extensions"
@@ -48,6 +52,12 @@ const (
 	CustomTemplateStorePath = "custom_templates"
 	// TempPath represent the subfolder where temporary files are saved
 	TempPath = "tmp"
+	// SSLCertPath represents the default ssl certificates path
+	SSLCertPath = "certs"
+	// DefaultSSLCertFilename represents the default ssl certificate file name
+	DefaultSSLCertFilename = "cert.pem"
+	// DefaultSSLKeyFilename represents the default ssl key file name
+	DefaultSSLKeyFilename = "key.pem"
 )
 
 // ErrUndefinedTLSFileType represents an error returned on undefined TLS file type
@@ -72,6 +82,11 @@ func NewService(dataStorePath, fileStorePath string) (*Service, error) {
 		return nil, err
 	}
 
+	err = service.createDirectoryInStore(SSLCertPath)
+	if err != nil {
+		return nil, err
+	}
+
 	err = service.createDirectoryInStore(TLSStorePath)
 	if err != nil {
 		return nil, err
@@ -87,12 +102,22 @@ func NewService(dataStorePath, fileStorePath string) (*Service, error) {
 		return nil, err
 	}
 
+	err = service.createDirectoryInStore(DockerConfigPath)
+	if err != nil {
+		return nil, err
+	}
+
 	return service, nil
 }
 
 // GetBinaryFolder returns the full path to the binary store on the filesystem
 func (service *Service) GetBinaryFolder() string {
 	return path.Join(service.fileStorePath, BinaryStorePath)
+}
+
+// GetDockerConfigPath returns the full path to the docker config store on the filesystem
+func (service *Service) GetDockerConfigPath() string {
+	return path.Join(service.fileStorePath, DockerConfigPath)
 }
 
 // RemoveDirectory removes a directory on the filesystem.
@@ -104,6 +129,66 @@ func (service *Service) RemoveDirectory(directoryPath string) error {
 // on its identifier.
 func (service *Service) GetStackProjectPath(stackIdentifier string) string {
 	return path.Join(service.fileStorePath, ComposeStorePath, stackIdentifier)
+}
+
+// Copy copies the file on fromFilePath to toFilePath
+// if toFilePath exists func will fail unless deleteIfExists is true
+func (service *Service) Copy(fromFilePath string, toFilePath string, deleteIfExists bool) error {
+	exists, err := service.FileExists(fromFilePath)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		return errors.New("File doesn't exist")
+	}
+
+	finput, err := os.Open(fromFilePath)
+	if err != nil {
+		return err
+	}
+
+	defer finput.Close()
+
+	exists, err = service.FileExists(toFilePath)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		if !deleteIfExists {
+			return errors.New("Destination file exists")
+		}
+
+		err := os.Remove(toFilePath)
+		if err != nil {
+			return err
+		}
+	}
+
+	foutput, err := os.Create(toFilePath)
+	if err != nil {
+		return err
+	}
+
+	defer foutput.Close()
+
+	buf := make([]byte, 1024)
+	for {
+		n, err := finput.Read(buf)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if n == 0 {
+			break
+		}
+
+		if _, err := foutput.Write(buf[:n]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // StoreStackFileFromBytes creates a subfolder in the ComposeStorePath and stores a new file from bytes.
@@ -203,7 +288,7 @@ func (service *Service) StoreTLSFileFromBytes(folder string, fileType portainer.
 	return path.Join(service.fileStorePath, tlsFilePath), nil
 }
 
-// GetPathForTLSFile returns the absolute path to a specific TLS file for an endpoint.
+// GetPathForTLSFile returns the absolute path to a specific TLS file for an environment(endpoint).
 func (service *Service) GetPathForTLSFile(folder string, fileType portainer.TLSFileType) (string, error) {
 	var fileName string
 	switch fileType {
@@ -279,13 +364,7 @@ func (service *Service) WriteJSONToFile(path string, content interface{}) error 
 
 // FileExists checks for the existence of the specified file.
 func (service *Service) FileExists(filePath string) (bool, error) {
-	if _, err := os.Stat(filePath); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+	return FileExists(filePath)
 }
 
 // KeyPairFilesExist checks for the existence of the key files.
@@ -504,4 +583,89 @@ func (service *Service) GetTemporaryPath() (string, error) {
 	}
 
 	return path.Join(service.fileStorePath, TempPath, uid.String()), nil
+}
+
+// GetDataStorePath returns path to data folder
+func (service *Service) GetDatastorePath() string {
+	return service.dataStorePath
+}
+
+func (service *Service) wrapFileStore(filepath string) string {
+	return path.Join(service.fileStorePath, filepath)
+}
+
+func defaultCertPathUnderFileStore() (string, string) {
+	certPath := path.Join(SSLCertPath, DefaultSSLCertFilename)
+	keyPath := path.Join(SSLCertPath, DefaultSSLKeyFilename)
+	return certPath, keyPath
+}
+
+// GetDefaultSSLCertsPath returns the ssl certs path
+func (service *Service) GetDefaultSSLCertsPath() (string, string) {
+	certPath, keyPath := defaultCertPathUnderFileStore()
+	return service.wrapFileStore(certPath), service.wrapFileStore(keyPath)
+}
+
+// StoreSSLCertPair stores a ssl certificate pair
+func (service *Service) StoreSSLCertPair(cert, key []byte) (string, string, error) {
+	certPath, keyPath := defaultCertPathUnderFileStore()
+
+	r := bytes.NewReader(cert)
+	err := service.createFileInStore(certPath, r)
+	if err != nil {
+		return "", "", err
+	}
+
+	r = bytes.NewReader(key)
+	err = service.createFileInStore(keyPath, r)
+	if err != nil {
+		return "", "", err
+	}
+
+	return service.wrapFileStore(certPath), service.wrapFileStore(keyPath), nil
+}
+
+// CopySSLCertPair copies a ssl certificate pair
+func (service *Service) CopySSLCertPair(certPath, keyPath string) (string, string, error) {
+	defCertPath, defKeyPath := service.GetDefaultSSLCertsPath()
+
+	err := service.Copy(certPath, defCertPath, false)
+	if err != nil {
+		return "", "", err
+	}
+
+	err = service.Copy(keyPath, defKeyPath, false)
+	if err != nil {
+		return "", "", err
+	}
+
+	return defCertPath, defKeyPath, nil
+}
+
+// FileExists checks for the existence of the specified file.
+func FileExists(filePath string) (bool, error) {
+	if _, err := os.Stat(filePath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func MoveDirectory(originalPath, newPath string) error {
+	if _, err := os.Stat(originalPath); err != nil {
+		return err
+	}
+
+	alreadyExists, err := FileExists(newPath)
+	if err != nil {
+		return err
+	}
+
+	if alreadyExists {
+		return errors.New("Target path already exists")
+	}
+
+	return os.Rename(originalPath, newPath)
 }

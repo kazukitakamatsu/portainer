@@ -3,7 +3,7 @@ package jwt
 import (
 	"errors"
 
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 
 	"fmt"
 	"time"
@@ -16,6 +16,7 @@ import (
 type Service struct {
 	secret             []byte
 	userSessionTimeout time.Duration
+	dataStore          portainer.DataStore
 }
 
 type claims struct {
@@ -31,7 +32,7 @@ var (
 )
 
 // NewService initializes a new service. It will generate a random key that will be used to sign JWT tokens.
-func NewService(userSessionDuration string) (*Service, error) {
+func NewService(userSessionDuration string, dataStore portainer.DataStore) (*Service, error) {
 	userSessionTimeout, err := time.ParseDuration(userSessionDuration)
 	if err != nil {
 		return nil, err
@@ -45,29 +46,28 @@ func NewService(userSessionDuration string) (*Service, error) {
 	service := &Service{
 		secret,
 		userSessionTimeout,
+		dataStore,
 	}
 	return service, nil
 }
 
+func (service *Service) defaultExpireAt() (int64) {
+	return time.Now().Add(service.userSessionTimeout).Unix()
+}
+
 // GenerateToken generates a new JWT token.
 func (service *Service) GenerateToken(data *portainer.TokenData) (string, error) {
-	expireToken := time.Now().Add(service.userSessionTimeout).Unix()
-	cl := claims{
-		UserID:   int(data.ID),
-		Username: data.Username,
-		Role:     int(data.Role),
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: expireToken,
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cl)
+	return service.generateSignedToken(data, service.defaultExpireAt())
+}
 
-	signedToken, err := token.SignedString(service.secret)
-	if err != nil {
-		return "", err
+// GenerateTokenForOAuth generates a new JWT for OAuth login
+// token expiry time from the OAuth provider is considered
+func (service *Service) GenerateTokenForOAuth(data *portainer.TokenData, expiryTime *time.Time) (string, error) {
+	expireAt := service.defaultExpireAt()
+	if expiryTime != nil && !expiryTime.IsZero() {
+		expireAt = expiryTime.Unix()
 	}
-
-	return signedToken, nil
+	return service.generateSignedToken(data, expireAt)
 }
 
 // ParseAndVerifyToken parses a JWT token and verify its validity. It returns an error if token is invalid.
@@ -96,4 +96,23 @@ func (service *Service) ParseAndVerifyToken(token string) (*portainer.TokenData,
 // SetUserSessionDuration sets the user session duration
 func (service *Service) SetUserSessionDuration(userSessionDuration time.Duration) {
 	service.userSessionTimeout = userSessionDuration
+}
+
+func (service *Service) generateSignedToken(data *portainer.TokenData, expiresAt int64) (string, error) {
+	cl := claims{
+		UserID:   int(data.ID),
+		Username: data.Username,
+		Role:     int(data.Role),
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expiresAt,
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, cl)
+
+	signedToken, err := token.SignedString(service.secret)
+	if err != nil {
+		return "", err
+	}
+
+	return signedToken, nil
 }

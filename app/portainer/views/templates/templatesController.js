@@ -36,6 +36,9 @@ angular.module('portainer.app').controller('TemplatesController', [
     StackService,
     endpoint
   ) {
+    const DOCKER_STANDALONE = 'DOCKER_STANDALONE';
+    const DOCKER_SWARM_MODE = 'DOCKER_SWARM_MODE';
+
     $scope.state = {
       selectedTemplate: null,
       showAdvancedOptions: false,
@@ -240,8 +243,25 @@ angular.module('portainer.app').controller('TemplatesController', [
 
       $scope.formValues.name = template.Name ? template.Name : '';
       $scope.state.selectedTemplate = template;
+      $scope.state.deployable = isDeployable($scope.applicationState.endpoint, template.Type);
       $anchorScroll('view-top');
     };
+
+    function isDeployable(endpoint, templateType) {
+      let deployable = false;
+      switch (templateType) {
+        case 1:
+          deployable = endpoint.mode.provider === DOCKER_SWARM_MODE || endpoint.mode.provider === DOCKER_STANDALONE;
+          break;
+        case 2:
+          deployable = endpoint.mode.provider === DOCKER_SWARM_MODE;
+          break;
+        case 3:
+          deployable = endpoint.mode.provider === DOCKER_STANDALONE;
+          break;
+      }
+      return deployable;
+    }
 
     function createTemplateConfiguration(template) {
       var network = $scope.formValues.network;

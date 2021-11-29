@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	httperror "github.com/portainer/libhttp/error"
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 	bolterrors "github.com/portainer/portainer/api/bolt/errors"
 	httperrors "github.com/portainer/portainer/api/http/errors"
 )
@@ -36,16 +36,16 @@ func NewRequestBouncer(dataStore portainer.DataStore, jwtService portainer.JWTSe
 	}
 }
 
-// PublicAccess defines a security check for public API endpoints.
-// No authentication is required to access these endpoints.
+// PublicAccess defines a security check for public API environments(endpoints).
+// No authentication is required to access these environments(endpoints).
 func (bouncer *RequestBouncer) PublicAccess(h http.Handler) http.Handler {
 	h = mwSecureHeaders(h)
 	return h
 }
 
-// AdminAccess defines a security check for API endpoints that require an authorization check.
-// Authentication is required to access these endpoints.
-// The administrator role is required to use these endpoints.
+// AdminAccess defines a security check for API environments(endpoints) that require an authorization check.
+// Authentication is required to access these environments(endpoints).
+// The administrator role is required to use these environments(endpoints).
 // The request context will be enhanced with a RestrictedRequestContext object
 // that might be used later to inside the API operation for extra authorization validation
 // and resource filtering.
@@ -56,8 +56,8 @@ func (bouncer *RequestBouncer) AdminAccess(h http.Handler) http.Handler {
 	return h
 }
 
-// RestrictedAccess defines a security check for restricted API endpoints.
-// Authentication is required to access these endpoints.
+// RestrictedAccess defines a security check for restricted API environments(endpoints).
+// Authentication is required to access these environments(endpoints).
 // The request context will be enhanced with a RestrictedRequestContext object
 // that might be used later to inside the API operation for extra authorization validation
 // and resource filtering.
@@ -68,8 +68,8 @@ func (bouncer *RequestBouncer) RestrictedAccess(h http.Handler) http.Handler {
 	return h
 }
 
-// AuthenticatedAccess defines a security check for restricted API endpoints.
-// Authentication is required to access these endpoints.
+// AuthenticatedAccess defines a security check for restricted API environments(endpoints).
+// Authentication is required to access these environments(endpoints).
 // The request context will be enhanced with a RestrictedRequestContext object
 // that might be used later to inside the API operation for extra authorization validation
 // and resource filtering.
@@ -80,8 +80,8 @@ func (bouncer *RequestBouncer) AuthenticatedAccess(h http.Handler) http.Handler 
 }
 
 // AuthorizedEndpointOperation retrieves the JWT token from the request context and verifies
-// that the user can access the specified endpoint.
-// An error is returned when access to the endpoint is denied or if the user do not have the required
+// that the user can access the specified environment(endpoint).
+// An error is returned when access to the environments(endpoints) is denied or if the user do not have the required
 // authorization to execute the operation.
 func (bouncer *RequestBouncer) AuthorizedEndpointOperation(r *http.Request, endpoint *portainer.Endpoint) error {
 	tokenData, err := RetrieveTokenData(r)
@@ -110,10 +110,10 @@ func (bouncer *RequestBouncer) AuthorizedEndpointOperation(r *http.Request, endp
 	return nil
 }
 
-// AuthorizedEdgeEndpointOperation verifies that the request was received from a valid Edge endpoint
+// AuthorizedEdgeEndpointOperation verifies that the request was received from a valid Edge environment(endpoint)
 func (bouncer *RequestBouncer) AuthorizedEdgeEndpointOperation(r *http.Request, endpoint *portainer.Endpoint) error {
 	if endpoint.Type != portainer.EdgeAgentOnKubernetesEnvironment && endpoint.Type != portainer.EdgeAgentOnDockerEnvironment {
-		return errors.New("Invalid endpoint type")
+		return errors.New("Invalid environment type")
 	}
 
 	edgeIdentifier := r.Header.Get(portainer.PortainerAgentEdgeIDHeader)
@@ -128,31 +128,9 @@ func (bouncer *RequestBouncer) AuthorizedEdgeEndpointOperation(r *http.Request, 
 	return nil
 }
 
-// RegistryAccess retrieves the JWT token from the request context and verifies
-// that the user can access the specified registry.
-// An error is returned when access is denied.
-func (bouncer *RequestBouncer) RegistryAccess(r *http.Request, registry *portainer.Registry) error {
-	tokenData, err := RetrieveTokenData(r)
-	if err != nil {
-		return err
-	}
-
-	if tokenData.Role == portainer.AdministratorRole {
-		return nil
-	}
-
-	memberships, err := bouncer.dataStore.TeamMembership().TeamMembershipsByUserID(tokenData.ID)
-	if err != nil {
-		return err
-	}
-
-	if !AuthorizedRegistryAccess(registry, tokenData.ID, memberships) {
-		return httperrors.ErrEndpointAccessDenied
-	}
-
-	return nil
-}
-
+// handlers are applied backwards to the incoming request:
+// - add secure handlers to the response
+// - parse the JWT token and put it into the http context.
 func (bouncer *RequestBouncer) mwAuthenticatedUser(h http.Handler) http.Handler {
 	h = bouncer.mwCheckAuthentication(h)
 	h = mwSecureHeaders(h)
@@ -160,9 +138,9 @@ func (bouncer *RequestBouncer) mwAuthenticatedUser(h http.Handler) http.Handler 
 }
 
 // mwCheckPortainerAuthorizations will verify that the user has the required authorization to access
-// a specific API endpoint.
+// a specific API environment(endpoint).
 // If the administratorOnly flag is specified, this will prevent non-admin
-// users from accessing the endpoint.
+// users from accessing the environment(endpoint).
 func (bouncer *RequestBouncer) mwCheckPortainerAuthorizations(next http.Handler, administratorOnly bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tokenData, err := RetrieveTokenData(r)
@@ -210,34 +188,25 @@ func (bouncer *RequestBouncer) mwUpgradeToRestrictedRequest(next http.Handler) h
 			return
 		}
 
-		ctx := storeRestrictedRequestContext(r, requestContext)
+		ctx := StoreRestrictedRequestContext(r, requestContext)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
 // mwCheckAuthentication provides Authentication middleware for handlers
+//
+// It parses the JWT token and adds the parsed token data to the http context
 func (bouncer *RequestBouncer) mwCheckAuthentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tokenData *portainer.TokenData
-		var token string
 
-		// Optionally, token might be set via the "token" query parameter.
-		// For example, in websocket requests
-		token = r.URL.Query().Get("token")
-
-		// Get token from the Authorization header
-		tokens, ok := r.Header["Authorization"]
-		if ok && len(tokens) >= 1 {
-			token = tokens[0]
-			token = strings.TrimPrefix(token, "Bearer ")
-		}
-
-		if token == "" {
-			httperror.WriteError(w, http.StatusUnauthorized, "Unauthorized", httperrors.ErrUnauthorized)
+		// get token from the Authorization header or query parameter
+		token, err := ExtractBearerToken(r)
+		if err != nil {
+			httperror.WriteError(w, http.StatusUnauthorized, "Unauthorized", err)
 			return
 		}
 
-		var err error
 		tokenData, err = bouncer.jwtService.ParseAndVerifyToken(token)
 		if err != nil {
 			httperror.WriteError(w, http.StatusUnauthorized, "Invalid JWT token", err)
@@ -253,10 +222,26 @@ func (bouncer *RequestBouncer) mwCheckAuthentication(next http.Handler) http.Han
 			return
 		}
 
-		ctx := storeTokenData(r, tokenData)
+		ctx := StoreTokenData(r, tokenData)
 		next.ServeHTTP(w, r.WithContext(ctx))
-		return
 	})
+}
+
+// ExtractBearerToken extracts the Bearer token from the request header or query parameter and returns the token.
+func ExtractBearerToken(r *http.Request) (string, error) {
+	// Optionally, token might be set via the "token" query parameter.
+	// For example, in websocket requests
+	token := r.URL.Query().Get("token")
+
+	tokens, ok := r.Header["Authorization"]
+	if ok && len(tokens) >= 1 {
+		token = tokens[0]
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+	if token == "" {
+		return "", httperrors.ErrUnauthorized
+	}
+	return token, nil
 }
 
 // mwSecureHeaders provides secure headers middleware for handlers.
@@ -269,30 +254,31 @@ func mwSecureHeaders(next http.Handler) http.Handler {
 }
 
 func (bouncer *RequestBouncer) newRestrictedContextRequest(userID portainer.UserID, userRole portainer.UserRole) (*RestrictedRequestContext, error) {
-	requestContext := &RestrictedRequestContext{
-		IsAdmin: true,
-		UserID:  userID,
+	if userRole == portainer.AdministratorRole {
+		return &RestrictedRequestContext{
+			IsAdmin: true,
+			UserID:  userID,
+		}, nil
 	}
 
-	if userRole != portainer.AdministratorRole {
-		requestContext.IsAdmin = false
-		memberships, err := bouncer.dataStore.TeamMembership().TeamMembershipsByUserID(userID)
-		if err != nil {
-			return nil, err
-		}
-
-		isTeamLeader := false
-		for _, membership := range memberships {
-			if membership.Role == portainer.TeamLeader {
-				isTeamLeader = true
-			}
-		}
-
-		requestContext.IsTeamLeader = isTeamLeader
-		requestContext.UserMemberships = memberships
+	memberships, err := bouncer.dataStore.TeamMembership().TeamMembershipsByUserID(userID)
+	if err != nil {
+		return nil, err
 	}
 
-	return requestContext, nil
+	isTeamLeader := false
+	for _, membership := range memberships {
+		if membership.Role == portainer.TeamLeader {
+			isTeamLeader = true
+		}
+	}
+
+	return &RestrictedRequestContext{
+		IsAdmin:         false,
+		UserID:          userID,
+		IsTeamLeader:    isTeamLeader,
+		UserMemberships: memberships,
+	}, nil
 }
 
 // EdgeComputeOperation defines a restriced edge compute operation.

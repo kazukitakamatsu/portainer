@@ -92,7 +92,7 @@
           ng-model="$ctrl.state.textFilter"
           ng-change="$ctrl.onTextFilterChange()"
           placeholder="Search..."
-          auto-focus
+          focus-if="!$ctrl.notAutoFocus"
           ng-model-options="{ debounce: 300 }"
         />
       </div>
@@ -176,6 +176,13 @@
                   Created
                 </a>
               </th>
+              <th ng-show="$ctrl.columnVisibility.columns.ip.display">
+                <a ng-click="$ctrl.changeOrderBy('IP')">
+                  IP Address
+                  <i class="fa fa-sort-alpha-down" aria-hidden="true" ng-if="$ctrl.state.orderBy === 'IP' && !$ctrl.state.reverseOrder"></i>
+                  <i class="fa fa-sort-alpha-up" aria-hidden="true" ng-if="$ctrl.state.orderBy === 'IP' && $ctrl.state.reverseOrder"></i>
+                </a>
+              </th>
               <th ng-if="$ctrl.showHostColumn" ng-show="$ctrl.columnVisibility.columns.host.display">
                 <a ng-click="$ctrl.changeOrderBy('NodeName')">
                   Host
@@ -250,11 +257,12 @@
               <td ng-show="$ctrl.columnVisibility.columns.created.display">
                 {{ item.Created | getisodatefromtimestamp }}
               </td>
+              <td ng-show="$ctrl.columnVisibility.columns.ip.display">{{ item.IP ? item.IP : '-' }}</td>
               <td ng-if="$ctrl.showHostColumn" ng-show="$ctrl.columnVisibility.columns.host.display">{{ item.NodeName ? item.NodeName : '-' }}</td>
               <td ng-show="$ctrl.columnVisibility.columns.ports.display">
                 <a
                   ng-if="item.Ports.length > 0"
-                  ng-repeat="p in item.Ports"
+                  ng-repeat="p in item.Ports | unique: 'public'"
                   class="image-tag"
                   ng-href="http://{{ $ctrl.state.publicURL || p.host }}:{{ p.public }}"
                   target="_blank"
@@ -287,7 +295,7 @@
               <span style="margin-right: 5px;">
                 Items per page
               </span>
-              <select class="form-control" ng-model="$ctrl.state.paginatedItemLimit" ng-change="$ctrl.changePaginationLimit()">
+              <select class="form-control" ng-model="$ctrl.state.paginatedItemLimit" ng-change="$ctrl.changePaginationLimit()" data-cy="component-paginationSelect">
                 <option value="0">All</option>
                 <option value="10">10</option>
                 <option value="25">25</option>

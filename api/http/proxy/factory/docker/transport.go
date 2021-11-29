@@ -1,19 +1,23 @@
 package docker
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/client"
 	portainer "github.com/portainer/portainer/api"
 	"github.com/portainer/portainer/api/docker"
-	"github.com/portainer/portainer/api/http/proxy/factory/responseutils"
+	"github.com/portainer/portainer/api/http/proxy/factory/utils"
 	"github.com/portainer/portainer/api/http/security"
 	"github.com/portainer/portainer/api/internal/authorization"
 )
@@ -88,7 +92,7 @@ func (transport *Transport) ProxyDockerRequest(request *http.Request) (*http.Res
 	requestPath := apiVersionRe.ReplaceAllString(request.URL.Path, "")
 	request.URL.Path = requestPath
 
-	if transport.endpoint.Type == portainer.AgentOnDockerEnvironment {
+	if transport.endpoint.Type == portainer.AgentOnDockerEnvironment || transport.endpoint.Type == portainer.EdgeAgentOnDockerEnvironment {
 		signature, err := transport.signatureService.CreateSignature(portainer.PortainerAgentSignatureMessage)
 		if err != nil {
 			return nil, err
@@ -155,14 +159,49 @@ func (transport *Transport) proxyAgentRequest(r *http.Request) (*http.Response, 
 			return transport.administratorOperation(r)
 		}
 
-		agentTargetHeader := r.Header.Get(portainer.PortainerAgentTargetHeader)
-		resourceID, err := transport.getVolumeResourceID(agentTargetHeader, volumeIDParameter[0])
+		volumeName := volumeIDParameter[0]
+
+		resourceID, err := transport.getVolumeResourceID(volumeName)
 		if err != nil {
 			return nil, err
 		}
 
 		// volume browser request
-		return transport.restrictedResourceOperation(r, resourceID, portainer.VolumeResourceControl, true)
+		return transport.restrictedResourceOperation(r, resourceID, volumeName, portainer.VolumeResourceControl, true)
+	case strings.HasPrefix(requestPath, "/dockerhub"):
+		requestPath, registryIdString := path.Split(r.URL.Path)
+
+		registryID, err := strconv.Atoi(registryIdString)
+		if err != nil {
+			return nil, fmt.Errorf("missing registry id: %w", err)
+		}
+
+		r.URL.Path = strings.TrimSuffix(requestPath, "/")
+
+		registry := &portainer.Registry{
+			Type: portainer.DockerHubRegistry,
+		}
+
+		if registryID != 0 {
+			registry, err = transport.dataStore.Registry().Registry(portainer.RegistryID(registryID))
+			if err != nil {
+				return nil, fmt.Errorf("failed fetching registry: %w", err)
+			}
+		}
+
+		if registry.Type != portainer.DockerHubRegistry {
+			return nil, errors.New("Invalid registry type")
+		}
+
+		newBody, err := json.Marshal(registry)
+		if err != nil {
+			return nil, err
+		}
+
+		r.Method = http.MethodPost
+
+		r.Body = ioutil.NopCloser(bytes.NewReader(newBody))
+		r.ContentLength = int64(len(newBody))
 	}
 
 	return transport.executeDockerRequest(r)
@@ -183,10 +222,10 @@ func (transport *Transport) proxyConfigRequest(request *http.Request) (*http.Res
 		if request.Method == http.MethodGet {
 			return transport.rewriteOperation(request, transport.configInspectOperation)
 		} else if request.Method == http.MethodDelete {
-			return transport.executeGenericResourceDeletionOperation(request, configID, portainer.ConfigResourceControl)
+			return transport.executeGenericResourceDeletionOperation(request, configID, configID, portainer.ConfigResourceControl)
 		}
 
-		return transport.restrictedResourceOperation(request, configID, portainer.ConfigResourceControl, false)
+		return transport.restrictedResourceOperation(request, configID, configID, portainer.ConfigResourceControl, false)
 	}
 }
 
@@ -211,16 +250,16 @@ func (transport *Transport) proxyContainerRequest(request *http.Request) (*http.
 			if action == "json" {
 				return transport.rewriteOperation(request, transport.containerInspectOperation)
 			}
-			return transport.restrictedResourceOperation(request, containerID, portainer.ContainerResourceControl, false)
+			return transport.restrictedResourceOperation(request, containerID, containerID, portainer.ContainerResourceControl, false)
 		} else if match, _ := path.Match("/containers/*", requestPath); match {
 			// Handle /containers/{id} requests
 			containerID := path.Base(requestPath)
 
 			if request.Method == http.MethodDelete {
-				return transport.executeGenericResourceDeletionOperation(request, containerID, portainer.ContainerResourceControl)
+				return transport.executeGenericResourceDeletionOperation(request, containerID, containerID, portainer.ContainerResourceControl)
 			}
 
-			return transport.restrictedResourceOperation(request, containerID, portainer.ContainerResourceControl, false)
+			return transport.restrictedResourceOperation(request, containerID, containerID, portainer.ContainerResourceControl, false)
 		}
 		return transport.executeDockerRequest(request)
 	}
@@ -239,7 +278,7 @@ func (transport *Transport) proxyServiceRequest(request *http.Request) (*http.Re
 		if match, _ := path.Match("/services/*/*", requestPath); match {
 			// Handle /services/{id}/{action} requests
 			serviceID := path.Base(path.Dir(requestPath))
-			return transport.restrictedResourceOperation(request, serviceID, portainer.ServiceResourceControl, false)
+			return transport.restrictedResourceOperation(request, serviceID, serviceID, portainer.ServiceResourceControl, false)
 		} else if match, _ := path.Match("/services/*", requestPath); match {
 			// Handle /services/{id} requests
 			serviceID := path.Base(requestPath)
@@ -248,9 +287,9 @@ func (transport *Transport) proxyServiceRequest(request *http.Request) (*http.Re
 			case http.MethodGet:
 				return transport.rewriteOperation(request, transport.serviceInspectOperation)
 			case http.MethodDelete:
-				return transport.executeGenericResourceDeletionOperation(request, serviceID, portainer.ServiceResourceControl)
+				return transport.executeGenericResourceDeletionOperation(request, serviceID, serviceID, portainer.ServiceResourceControl)
 			}
-			return transport.restrictedResourceOperation(request, serviceID, portainer.ServiceResourceControl, false)
+			return transport.restrictedResourceOperation(request, serviceID, serviceID, portainer.ServiceResourceControl, false)
 		}
 		return transport.executeDockerRequest(request)
 	}
@@ -259,7 +298,7 @@ func (transport *Transport) proxyServiceRequest(request *http.Request) (*http.Re
 func (transport *Transport) proxyVolumeRequest(request *http.Request) (*http.Response, error) {
 	switch requestPath := request.URL.Path; requestPath {
 	case "/volumes/create":
-		return transport.decorateVolumeResourceCreationOperation(request, volumeObjectIdentifier, portainer.VolumeResourceControl)
+		return transport.decorateVolumeResourceCreationOperation(request, portainer.VolumeResourceControl)
 
 	case "/volumes/prune":
 		return transport.administratorOperation(request)
@@ -288,9 +327,9 @@ func (transport *Transport) proxyNetworkRequest(request *http.Request) (*http.Re
 		if request.Method == http.MethodGet {
 			return transport.rewriteOperation(request, transport.networkInspectOperation)
 		} else if request.Method == http.MethodDelete {
-			return transport.executeGenericResourceDeletionOperation(request, networkID, portainer.NetworkResourceControl)
+			return transport.executeGenericResourceDeletionOperation(request, networkID, networkID, portainer.NetworkResourceControl)
 		}
-		return transport.restrictedResourceOperation(request, networkID, portainer.NetworkResourceControl, false)
+		return transport.restrictedResourceOperation(request, networkID, networkID, portainer.NetworkResourceControl, false)
 	}
 }
 
@@ -309,9 +348,9 @@ func (transport *Transport) proxySecretRequest(request *http.Request) (*http.Res
 		if request.Method == http.MethodGet {
 			return transport.rewriteOperation(request, transport.secretInspectOperation)
 		} else if request.Method == http.MethodDelete {
-			return transport.executeGenericResourceDeletionOperation(request, secretID, portainer.SecretResourceControl)
+			return transport.executeGenericResourceDeletionOperation(request, secretID, secretID, portainer.SecretResourceControl)
 		}
-		return transport.restrictedResourceOperation(request, secretID, portainer.SecretResourceControl, false)
+		return transport.restrictedResourceOperation(request, secretID, secretID, portainer.SecretResourceControl, false)
 	}
 }
 
@@ -377,13 +416,13 @@ func (transport *Transport) replaceRegistryAuthenticationHeader(request *http.Re
 			return nil, err
 		}
 
-		var originalHeaderData registryAuthenticationHeader
+		var originalHeaderData portainerRegistryAuthenticationHeader
 		err = json.Unmarshal(decodedHeaderData, &originalHeaderData)
 		if err != nil {
 			return nil, err
 		}
 
-		authenticationHeader := createRegistryAuthenticationHeader(originalHeaderData.Serveraddress, accessContext)
+		authenticationHeader := createRegistryAuthenticationHeader(originalHeaderData.RegistryId, accessContext)
 
 		headerData, err := json.Marshal(authenticationHeader)
 		if err != nil {
@@ -398,7 +437,7 @@ func (transport *Transport) replaceRegistryAuthenticationHeader(request *http.Re
 	return transport.decorateGenericResourceCreationOperation(request, serviceObjectIdentifier, portainer.ServiceResourceControl)
 }
 
-func (transport *Transport) restrictedResourceOperation(request *http.Request, resourceID string, resourceType portainer.ResourceControlType, volumeBrowseRestrictionCheck bool) (*http.Response, error) {
+func (transport *Transport) restrictedResourceOperation(request *http.Request, resourceID string, dockerResourceID string, resourceType portainer.ResourceControlType, volumeBrowseRestrictionCheck bool) (*http.Response, error) {
 	var err error
 	tokenData, err := security.RetrieveTokenData(request)
 	if err != nil {
@@ -413,7 +452,7 @@ func (transport *Transport) restrictedResourceOperation(request *http.Request, r
 			}
 
 			if !securitySettings.AllowVolumeBrowserForRegularUsers {
-				return responseutils.WriteAccessDeniedResponse()
+				return utils.WriteAccessDeniedResponse()
 			}
 		}
 
@@ -436,20 +475,24 @@ func (transport *Transport) restrictedResourceOperation(request *http.Request, r
 		if resourceControl == nil {
 			agentTargetHeader := request.Header.Get(portainer.PortainerAgentTargetHeader)
 
+			if dockerResourceID == "" {
+				dockerResourceID = resourceID
+			}
+
 			// This resource was created outside of portainer,
 			// is part of a Docker service or part of a Docker Swarm/Compose stack.
-			inheritedResourceControl, err := transport.getInheritedResourceControlFromServiceOrStack(resourceID, agentTargetHeader, resourceType, resourceControls)
+			inheritedResourceControl, err := transport.getInheritedResourceControlFromServiceOrStack(dockerResourceID, agentTargetHeader, resourceType, resourceControls)
 			if err != nil {
 				return nil, err
 			}
 
 			if inheritedResourceControl == nil || !authorization.UserCanAccessResource(tokenData.ID, userTeamIDs, inheritedResourceControl) {
-				return responseutils.WriteAccessDeniedResponse()
+				return utils.WriteAccessDeniedResponse()
 			}
 		}
 
 		if resourceControl != nil && !authorization.UserCanAccessResource(tokenData.ID, userTeamIDs, resourceControl) {
-			return responseutils.WriteAccessDeniedResponse()
+			return utils.WriteAccessDeniedResponse()
 		}
 	}
 
@@ -513,7 +556,7 @@ func (transport *Transport) interceptAndRewriteRequest(request *http.Request, op
 // https://docs.docker.com/engine/api/v1.37/#operation/SecretCreate
 // https://docs.docker.com/engine/api/v1.37/#operation/ConfigCreate
 func (transport *Transport) decorateGenericResourceCreationResponse(response *http.Response, resourceIdentifierAttribute string, resourceType portainer.ResourceControlType, userID portainer.UserID) error {
-	responseObject, err := responseutils.GetResponseAsJSONOBject(response)
+	responseObject, err := utils.GetResponseAsJSONObject(response)
 	if err != nil {
 		return err
 	}
@@ -532,7 +575,7 @@ func (transport *Transport) decorateGenericResourceCreationResponse(response *ht
 
 	responseObject = decorateObject(responseObject, resourceControl)
 
-	return responseutils.RewriteResponse(response, responseObject, http.StatusOK)
+	return utils.RewriteResponse(response, responseObject, http.StatusOK)
 }
 
 func (transport *Transport) decorateGenericResourceCreationOperation(request *http.Request, resourceIdentifierAttribute string, resourceType portainer.ResourceControlType) (*http.Response, error) {
@@ -553,8 +596,8 @@ func (transport *Transport) decorateGenericResourceCreationOperation(request *ht
 	return response, err
 }
 
-func (transport *Transport) executeGenericResourceDeletionOperation(request *http.Request, resourceIdentifierAttribute string, resourceType portainer.ResourceControlType) (*http.Response, error) {
-	response, err := transport.restrictedResourceOperation(request, resourceIdentifierAttribute, resourceType, false)
+func (transport *Transport) executeGenericResourceDeletionOperation(request *http.Request, resourceIdentifierAttribute string, volumeName string, resourceType portainer.ResourceControlType) (*http.Response, error) {
+	response, err := transport.restrictedResourceOperation(request, resourceIdentifierAttribute, volumeName, resourceType, false)
 	if err != nil {
 		return response, err
 	}
@@ -595,7 +638,7 @@ func (transport *Transport) administratorOperation(request *http.Request) (*http
 	}
 
 	if tokenData.Role != portainer.AdministratorRole {
-		return responseutils.WriteAccessDeniedResponse()
+		return utils.WriteAccessDeniedResponse()
 	}
 
 	return transport.executeDockerRequest(request)
@@ -608,15 +651,15 @@ func (transport *Transport) createRegistryAccessContext(request *http.Request) (
 	}
 
 	accessContext := &registryAccessContext{
-		isAdmin: true,
-		userID:  tokenData.ID,
+		isAdmin:    true,
+		endpointID: transport.endpoint.ID,
 	}
 
-	hub, err := transport.dataStore.DockerHub().DockerHub()
+	user, err := transport.dataStore.User().User(tokenData.ID)
 	if err != nil {
 		return nil, err
 	}
-	accessContext.dockerHub = hub
+	accessContext.user = user
 
 	registries, err := transport.dataStore.Registry().Registries()
 	if err != nil {
@@ -624,7 +667,7 @@ func (transport *Transport) createRegistryAccessContext(request *http.Request) (
 	}
 	accessContext.registries = registries
 
-	if tokenData.Role != portainer.AdministratorRole {
+	if user.Role != portainer.AdministratorRole {
 		accessContext.isAdmin = false
 
 		teamMemberships, err := transport.dataStore.TeamMembership().TeamMembershipsByUserID(tokenData.ID)

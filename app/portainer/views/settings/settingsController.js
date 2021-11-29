@@ -1,10 +1,24 @@
+import angular from 'angular';
+
+import { buildOption } from '@/portainer/components/box-selector';
+import { S3_BACKUP_SETTING } from '@/portainer/feature-flags/feature-ids';
+
 angular.module('portainer.app').controller('SettingsController', [
   '$scope',
   '$state',
   'Notifications',
   'SettingsService',
   'StateManager',
-  function ($scope, $state, Notifications, SettingsService, StateManager) {
+  'BackupService',
+  'FileSaver',
+  'Blob',
+  function ($scope, $state, Notifications, SettingsService, StateManager, BackupService, FileSaver) {
+    $scope.s3BackupFeatureId = S3_BACKUP_SETTING;
+    $scope.backupOptions = [
+      buildOption('backup_file', 'fa fa-download', 'Download backup file', '', 'file'),
+      buildOption('backup_s3', 'fa fa-upload', 'Store in S3', 'Define a cron schedule', 's3', S3_BACKUP_SETTING),
+    ];
+
     $scope.state = {
       actionInProgress: false,
       availableEdgeAgentCheckinOptions: [
@@ -21,7 +35,33 @@ angular.module('portainer.app').controller('SettingsController', [
           value: 30,
         },
       ],
+      availableKubeconfigExpiryOptions: [
+        {
+          key: '1 day',
+          value: '24h',
+        },
+        {
+          key: '7 days',
+          value: `${24 * 7}h`,
+        },
+        {
+          key: '30 days',
+          value: `${24 * 30}h`,
+        },
+        {
+          key: '1 year',
+          value: `${24 * 30 * 12}h`,
+        },
+        {
+          key: 'No expiry',
+          value: '0',
+        },
+      ],
+      backupInProgress: false,
+      featureLimited: false,
     };
+
+    $scope.BACKUP_FORM_TYPES = { S3: 's3', FILE: 'file' };
 
     $scope.formValues = {
       customLogo: false,
@@ -29,6 +69,14 @@ angular.module('portainer.app').controller('SettingsController', [
       labelValue: '',
       enableEdgeComputeFeatures: false,
       enableTelemetry: false,
+      passwordProtect: false,
+      password: '',
+      backupFormType: $scope.BACKUP_FORM_TYPES.FILE,
+    };
+
+    $scope.onBackupOptionsChange = function (type, limited) {
+      $scope.formValues.backupFormType = type;
+      $scope.state.featureLimited = limited;
     };
 
     $scope.removeFilteredContainerLabel = function (index) {
@@ -47,6 +95,28 @@ angular.module('portainer.app').controller('SettingsController', [
       settings.BlackListedLabels.push(label);
 
       updateSettings(settings);
+    };
+
+    $scope.downloadBackup = function () {
+      const payload = {};
+      if ($scope.formValues.passwordProtect) {
+        payload.password = $scope.formValues.password;
+      }
+
+      $scope.state.backupInProgress = true;
+
+      BackupService.downloadBackup(payload)
+        .then(function success(data) {
+          const downloadData = new Blob([data.file], { type: 'application/gzip' });
+          FileSaver.saveAs(downloadData, data.name);
+          Notifications.success('Backup successfully downloaded');
+        })
+        .catch(function error(err) {
+          Notifications.error('Failure', err, 'Unable to download backup');
+        })
+        .finally(function final() {
+          $scope.state.backupInProgress = false;
+        });
     };
 
     $scope.saveApplicationSettings = function () {

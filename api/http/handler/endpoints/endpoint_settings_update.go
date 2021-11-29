@@ -11,25 +11,49 @@ import (
 )
 
 type endpointSettingsUpdatePayload struct {
-	AllowBindMountsForRegularUsers            *bool `json:"allowBindMountsForRegularUsers"`
-	AllowPrivilegedModeForRegularUsers        *bool `json:"allowPrivilegedModeForRegularUsers"`
-	AllowVolumeBrowserForRegularUsers         *bool `json:"allowVolumeBrowserForRegularUsers"`
-	AllowHostNamespaceForRegularUsers         *bool `json:"allowHostNamespaceForRegularUsers"`
-	AllowDeviceMappingForRegularUsers         *bool `json:"allowDeviceMappingForRegularUsers"`
-	AllowStackManagementForRegularUsers       *bool `json:"allowStackManagementForRegularUsers"`
-	AllowContainerCapabilitiesForRegularUsers *bool `json:"allowContainerCapabilitiesForRegularUsers"`
-	EnableHostManagementFeatures              *bool `json:"enableHostManagementFeatures"`
+	// Whether non-administrator should be able to use bind mounts when creating containers
+	AllowBindMountsForRegularUsers *bool `json:"allowBindMountsForRegularUsers" example:"false"`
+	// Whether non-administrator should be able to use privileged mode when creating containers
+	AllowPrivilegedModeForRegularUsers *bool `json:"allowPrivilegedModeForRegularUsers" example:"false"`
+	// Whether non-administrator should be able to browse volumes
+	AllowVolumeBrowserForRegularUsers *bool `json:"allowVolumeBrowserForRegularUsers" example:"true"`
+	// Whether non-administrator should be able to use the host pid
+	AllowHostNamespaceForRegularUsers *bool `json:"allowHostNamespaceForRegularUsers" example:"true"`
+	// Whether non-administrator should be able to use device mapping
+	AllowDeviceMappingForRegularUsers *bool `json:"allowDeviceMappingForRegularUsers" example:"true"`
+	// Whether non-administrator should be able to manage stacks
+	AllowStackManagementForRegularUsers *bool `json:"allowStackManagementForRegularUsers" example:"true"`
+	// Whether non-administrator should be able to use container capabilities
+	AllowContainerCapabilitiesForRegularUsers *bool `json:"allowContainerCapabilitiesForRegularUsers" example:"true"`
+	// Whether non-administrator should be able to use sysctl settings
+	AllowSysctlSettingForRegularUsers *bool `json:"allowSysctlSettingForRegularUsers" example:"true"`
+	// Whether host management features are enabled
+	EnableHostManagementFeatures *bool `json:"enableHostManagementFeatures" example:"true"`
 }
 
 func (payload *endpointSettingsUpdatePayload) Validate(r *http.Request) error {
 	return nil
 }
 
-// PUT request on /api/endpoints/:id/settings
+// @id EndpointSettingsUpdate
+// @summary Update settings for an environments(endpoints)
+// @description Update settings for an environments(endpoints).
+// @description **Access policy**: administrator
+// @security jwt
+// @tags endpoints
+// @accept json
+// @produce json
+// @param id path int true "Environment(Endpoint) identifier"
+// @param body body endpointSettingsUpdatePayload true "Environment(Endpoint) details"
+// @success 200 {object} portainer.Endpoint "Success"
+// @failure 400 "Invalid request"
+// @failure 404 "Environment(Endpoint) not found"
+// @failure 500 "Server error"
+// @router /api/endpoints/{id}/settings [put]
 func (handler *Handler) endpointSettingsUpdate(w http.ResponseWriter, r *http.Request) *httperror.HandlerError {
 	endpointID, err := request.RetrieveNumericRouteVariableValue(r, "id")
 	if err != nil {
-		return &httperror.HandlerError{http.StatusBadRequest, "Invalid endpoint identifier route variable", err}
+		return &httperror.HandlerError{http.StatusBadRequest, "Invalid environment identifier route variable", err}
 	}
 
 	var payload endpointSettingsUpdatePayload
@@ -40,9 +64,9 @@ func (handler *Handler) endpointSettingsUpdate(w http.ResponseWriter, r *http.Re
 
 	endpoint, err := handler.DataStore.Endpoint().Endpoint(portainer.EndpointID(endpointID))
 	if err == errors.ErrObjectNotFound {
-		return &httperror.HandlerError{http.StatusNotFound, "Unable to find an endpoint with the specified identifier inside the database", err}
+		return &httperror.HandlerError{http.StatusNotFound, "Unable to find an environment with the specified identifier inside the database", err}
 	} else if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find an endpoint with the specified identifier inside the database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find an environment with the specified identifier inside the database", err}
 	}
 
 	securitySettings := endpoint.SecuritySettings
@@ -75,6 +99,10 @@ func (handler *Handler) endpointSettingsUpdate(w http.ResponseWriter, r *http.Re
 		securitySettings.AllowVolumeBrowserForRegularUsers = *payload.AllowVolumeBrowserForRegularUsers
 	}
 
+	if payload.AllowSysctlSettingForRegularUsers != nil {
+		securitySettings.AllowSysctlSettingForRegularUsers = *payload.AllowSysctlSettingForRegularUsers
+	}
+
 	if payload.EnableHostManagementFeatures != nil {
 		securitySettings.EnableHostManagementFeatures = *payload.EnableHostManagementFeatures
 	}
@@ -83,7 +111,7 @@ func (handler *Handler) endpointSettingsUpdate(w http.ResponseWriter, r *http.Re
 
 	err = handler.DataStore.Endpoint().UpdateEndpoint(portainer.EndpointID(endpointID), endpoint)
 	if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Failed persisting endpoint in database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Failed persisting environment in database", err}
 	}
 
 	return response.JSON(w, endpoint)

@@ -3,17 +3,18 @@ package websocket
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/portainer/portainer/api/bolt/errors"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"time"
 
+	"github.com/portainer/portainer/api/bolt/errors"
+
 	"github.com/asaskevich/govalidator"
 	"github.com/gorilla/websocket"
 	httperror "github.com/portainer/libhttp/error"
 	"github.com/portainer/libhttp/request"
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 )
 
 type execStartOperationPayload struct {
@@ -21,11 +22,23 @@ type execStartOperationPayload struct {
 	Detach bool
 }
 
-// websocketExec handles GET requests on /websocket/exec?id=<execID>&endpointId=<endpointID>&nodeName=<nodeName>&token=<token>
-// If the nodeName query parameter is present, the request will be proxied to the underlying agent endpoint.
-// If the nodeName query parameter is not specified, the request will be upgraded to the websocket protocol and
-// an ExecStart operation HTTP request will be created and hijacked.
-// Authentication and access is controled via the mandatory token query parameter.
+// @summary Execute a websocket
+// @description If the nodeName query parameter is present, the request will be proxied to the underlying agent environment(endpoint).
+// @description If the nodeName query parameter is not specified, the request will be upgraded to the websocket protocol and
+// @description an ExecStart operation HTTP request will be created and hijacked.
+// @description Authentication and access is controlled via the mandatory token query parameter.
+// @security jwt
+// @tags websocket
+// @accept json
+// @produce json
+// @param endpointId query int true "environment(endpoint) ID of the environment(endpoint) where the resource is located"
+// @param nodeName query string false "node name"
+// @param token query string true "JWT token used for authentication against this environment(endpoint)"
+// @success 200
+// @failure 400
+// @failure 409
+// @failure 500
+// @router /websocket/exec [get]
 func (handler *Handler) websocketExec(w http.ResponseWriter, r *http.Request) *httperror.HandlerError {
 	execID, err := request.RetrieveQueryParameter(r, "id", false)
 	if err != nil {
@@ -42,14 +55,14 @@ func (handler *Handler) websocketExec(w http.ResponseWriter, r *http.Request) *h
 
 	endpoint, err := handler.DataStore.Endpoint().Endpoint(portainer.EndpointID(endpointID))
 	if err == errors.ErrObjectNotFound {
-		return &httperror.HandlerError{http.StatusNotFound, "Unable to find the endpoint associated to the stack inside the database", err}
+		return &httperror.HandlerError{http.StatusNotFound, "Unable to find the environment associated to the stack inside the database", err}
 	} else if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find the endpoint associated to the stack inside the database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find the environment associated to the stack inside the database", err}
 	}
 
 	err = handler.requestBouncer.AuthorizedEndpointOperation(r, endpoint)
 	if err != nil {
-		return &httperror.HandlerError{http.StatusForbidden, "Permission denied to access endpoint", err}
+		return &httperror.HandlerError{http.StatusForbidden, "Permission denied to access environment", err}
 	}
 
 	params := &webSocketRequestParams{

@@ -10,6 +10,8 @@ export function SettingsViewModel(data) {
   this.EnableEdgeComputeFeatures = data.EnableEdgeComputeFeatures;
   this.UserSessionTimeout = data.UserSessionTimeout;
   this.EnableTelemetry = data.EnableTelemetry;
+  this.KubeconfigExpiry = data.KubeconfigExpiry;
+  this.HelmRepositoryURL = data.HelmRepositoryURL;
 }
 
 export function PublicSettingsViewModel(settings) {
@@ -18,6 +20,8 @@ export function PublicSettingsViewModel(settings) {
   this.LogoURL = settings.LogoURL;
   this.OAuthLoginURI = settings.OAuthLoginURI;
   this.EnableTelemetry = settings.EnableTelemetry;
+  this.OAuthLogoutURI = settings.OAuthLogoutURI;
+  this.KubeconfigExpiry = settings.KubeconfigExpiry;
 }
 
 export function LDAPSettingsViewModel(data) {
@@ -52,4 +56,6 @@ export function OAuthSettingsViewModel(data) {
   this.Scopes = data.Scopes;
   this.OAuthAutoCreateUsers = data.OAuthAutoCreateUsers;
   this.DefaultTeamID = data.DefaultTeamID;
+  this.SSO = data.SSO;
+  this.LogoutURI = data.LogoutURI;
 }

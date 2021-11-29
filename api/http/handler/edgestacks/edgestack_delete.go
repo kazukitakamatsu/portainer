@@ -6,11 +6,24 @@ import (
 	httperror "github.com/portainer/libhttp/error"
 	"github.com/portainer/libhttp/request"
 	"github.com/portainer/libhttp/response"
-	"github.com/portainer/portainer/api"
+	portainer "github.com/portainer/portainer/api"
 	"github.com/portainer/portainer/api/bolt/errors"
 	"github.com/portainer/portainer/api/internal/edge"
 )
 
+// @id EdgeStackDelete
+// @summary Delete an EdgeStack
+// @description
+// @tags edge_stacks
+// @security jwt
+// @accept json
+// @produce json
+// @param id path string true "EdgeStack Id"
+// @success 204
+// @failure 500
+// @failure 400
+// @failure 503 "Edge compute features are disabled"
+// @router /edge_stacks/{id} [delete]
 func (handler *Handler) edgeStackDelete(w http.ResponseWriter, r *http.Request) *httperror.HandlerError {
 	edgeStackID, err := request.RetrieveNumericRouteVariableValue(r, "id")
 	if err != nil {
@@ -29,34 +42,27 @@ func (handler *Handler) edgeStackDelete(w http.ResponseWriter, r *http.Request) 
 		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to remove the edge stack from the database", err}
 	}
 
-	endpoints, err := handler.DataStore.Endpoint().Endpoints()
+	relationConfig, err := fetchEndpointRelationsConfig(handler.DataStore)
 	if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to retrieve endpoints from database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to retrieve environments relations config from database", err}
 	}
 
-	endpointGroups, err := handler.DataStore.EndpointGroup().EndpointGroups()
+	relatedEndpointIds, err := edge.EdgeStackRelatedEndpoints(edgeStack.EdgeGroups, relationConfig.endpoints, relationConfig.endpointGroups, relationConfig.edgeGroups)
 	if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to retrieve endpoint groups from database", err}
+		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to retrieve edge stack related environments from database", err}
 	}
 
-	edgeGroups, err := handler.DataStore.EdgeGroup().EdgeGroups()
-	if err != nil {
-		return &httperror.HandlerError{http.StatusInternalServerError, "Unable to retrieve edge groups from database", err}
-	}
-
-	relatedEndpoints, err := edge.EdgeStackRelatedEndpoints(edgeStack.EdgeGroups, endpoints, endpointGroups, edgeGroups)
-
-	for _, endpointID := range relatedEndpoints {
+	for _, endpointID := range relatedEndpointIds {
 		relation, err := handler.DataStore.EndpointRelation().EndpointRelation(endpointID)
 		if err != nil {
-			return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find endpoint relation in database", err}
+			return &httperror.HandlerError{http.StatusInternalServerError, "Unable to find environment relation in database", err}
 		}
 
 		delete(relation.EdgeStacks, edgeStack.ID)
 
 		err = handler.DataStore.EndpointRelation().UpdateEndpointRelation(endpointID, relation)
 		if err != nil {
-			return &httperror.HandlerError{http.StatusInternalServerError, "Unable to persist endpoint relation in database", err}
+			return &httperror.HandlerError{http.StatusInternalServerError, "Unable to persist environment relation in database", err}
 		}
 	}
 

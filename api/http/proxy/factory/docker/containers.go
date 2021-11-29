@@ -10,7 +10,7 @@ import (
 
 	"github.com/docker/docker/client"
 	portainer "github.com/portainer/portainer/api"
-	"github.com/portainer/portainer/api/http/proxy/factory/responseutils"
+	"github.com/portainer/portainer/api/http/proxy/factory/utils"
 	"github.com/portainer/portainer/api/http/security"
 	"github.com/portainer/portainer/api/internal/authorization"
 )
@@ -19,7 +19,7 @@ const (
 	containerObjectIdentifier = "Id"
 )
 
-func getInheritedResourceControlFromContainerLabels(dockerClient *client.Client, containerID string, resourceControls []portainer.ResourceControl) (*portainer.ResourceControl, error) {
+func getInheritedResourceControlFromContainerLabels(dockerClient *client.Client, endpointID portainer.EndpointID, containerID string, resourceControls []portainer.ResourceControl) (*portainer.ResourceControl, error) {
 	container, err := dockerClient.ContainerInspect(context.Background(), containerID)
 	if err != nil {
 		return nil, err
@@ -33,14 +33,9 @@ func getInheritedResourceControlFromContainerLabels(dockerClient *client.Client,
 		}
 	}
 
-	swarmStackName := container.Config.Labels[resourceLabelForDockerSwarmStackName]
-	if swarmStackName != "" {
-		return authorization.GetResourceControlByResourceIDAndType(swarmStackName, portainer.StackResourceControl, resourceControls), nil
-	}
-
-	composeStackName := container.Config.Labels[resourceLabelForDockerComposeStackName]
-	if composeStackName != "" {
-		return authorization.GetResourceControlByResourceIDAndType(composeStackName, portainer.StackResourceControl, resourceControls), nil
+	stackResourceID := getStackResourceIDFromLabels(container.Config.Labels, endpointID)
+	if stackResourceID != "" {
+		return authorization.GetResourceControlByResourceIDAndType(stackResourceID, portainer.StackResourceControl, resourceControls), nil
 	}
 
 	return nil, nil
@@ -51,7 +46,7 @@ func getInheritedResourceControlFromContainerLabels(dockerClient *client.Client,
 func (transport *Transport) containerListOperation(response *http.Response, executor *operationExecutor) error {
 	// ContainerList response is a JSON array
 	// https://docs.docker.com/engine/api/v1.28/#operation/ContainerList
-	responseArray, err := responseutils.GetResponseAsJSONArray(response)
+	responseArray, err := utils.GetResponseAsJSONArray(response)
 	if err != nil {
 		return err
 	}
@@ -74,7 +69,7 @@ func (transport *Transport) containerListOperation(response *http.Response, exec
 		}
 	}
 
-	return responseutils.RewriteResponse(response, responseArray, http.StatusOK)
+	return utils.RewriteResponse(response, responseArray, http.StatusOK)
 }
 
 // containerInspectOperation extracts the response as a JSON object, verify that the user
@@ -82,7 +77,7 @@ func (transport *Transport) containerListOperation(response *http.Response, exec
 func (transport *Transport) containerInspectOperation(response *http.Response, executor *operationExecutor) error {
 	//ContainerInspect response is a JSON object
 	// https://docs.docker.com/engine/api/v1.28/#operation/ContainerInspect
-	responseObject, err := responseutils.GetResponseAsJSONOBject(response)
+	responseObject, err := utils.GetResponseAsJSONObject(response)
 	if err != nil {
 		return err
 	}
@@ -101,9 +96,9 @@ func (transport *Transport) containerInspectOperation(response *http.Response, e
 // Labels are available under the "Config.Labels" property.
 // API schema reference: https://docs.docker.com/engine/api/v1.28/#operation/ContainerInspect
 func selectorContainerLabelsFromContainerInspectOperation(responseObject map[string]interface{}) map[string]interface{} {
-	containerConfigObject := responseutils.GetJSONObject(responseObject, "Config")
+	containerConfigObject := utils.GetJSONObject(responseObject, "Config")
 	if containerConfigObject != nil {
-		containerLabelsObject := responseutils.GetJSONObject(containerConfigObject, "Labels")
+		containerLabelsObject := utils.GetJSONObject(containerConfigObject, "Labels")
 		return containerLabelsObject
 	}
 	return nil
@@ -114,7 +109,7 @@ func selectorContainerLabelsFromContainerInspectOperation(responseObject map[str
 // Labels are available under the "Labels" property.
 // API schema reference: https://docs.docker.com/engine/api/v1.28/#operation/ContainerList
 func selectorContainerLabelsFromContainerListOperation(responseObject map[string]interface{}) map[string]interface{} {
-	containerLabelsObject := responseutils.GetJSONObject(responseObject, "Labels")
+	containerLabelsObject := utils.GetJSONObject(responseObject, "Labels")
 	return containerLabelsObject
 }
 
@@ -157,12 +152,13 @@ func containerHasBlackListedLabel(containerLabels map[string]interface{}, labelB
 func (transport *Transport) decorateContainerCreationOperation(request *http.Request, resourceIdentifierAttribute string, resourceType portainer.ResourceControlType) (*http.Response, error) {
 	type PartialContainer struct {
 		HostConfig struct {
-			Privileged bool          `json:"Privileged"`
-			PidMode    string        `json:"PidMode"`
-			Devices    []interface{} `json:"Devices"`
-			CapAdd     []string      `json:"CapAdd"`
-			CapDrop    []string      `json:"CapDrop"`
-			Binds      []string      `json:"Binds"`
+			Privileged bool                   `json:"Privileged"`
+			PidMode    string                 `json:"PidMode"`
+			Devices    []interface{}          `json:"Devices"`
+			Sysctls    map[string]interface{} `json:"Sysctls"`
+			CapAdd     []string               `json:"CapAdd"`
+			CapDrop    []string               `json:"CapDrop"`
+			Binds      []string               `json:"Binds"`
 		} `json:"HostConfig"`
 	}
 
@@ -207,6 +203,10 @@ func (transport *Transport) decorateContainerCreationOperation(request *http.Req
 
 		if !securitySettings.AllowDeviceMappingForRegularUsers && len(partialContainer.HostConfig.Devices) > 0 {
 			return forbiddenResponse, errors.New("forbidden to use device mapping")
+		}
+
+		if !securitySettings.AllowSysctlSettingForRegularUsers && len(partialContainer.HostConfig.Sysctls) > 0 {
+			return forbiddenResponse, errors.New("forbidden to use sysctl settings")
 		}
 
 		if !securitySettings.AllowContainerCapabilitiesForRegularUsers && (len(partialContainer.HostConfig.CapAdd) > 0 || len(partialContainer.HostConfig.CapDrop) > 0) {

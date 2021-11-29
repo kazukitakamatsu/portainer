@@ -6,6 +6,8 @@ const CleanTerminalPlugin = require('clean-terminal-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CleanWebpackPlugin = require('clean-webpack-plugin');
 const LodashModuleReplacementPlugin = require('lodash-webpack-plugin');
+const ESLintPlugin = require('eslint-webpack-plugin');
+
 const pkg = require('../package.json');
 const projectRoot = path.resolve(__dirname, '..');
 
@@ -22,19 +24,22 @@ module.exports = {
       {
         test: /\.js$/,
         enforce: 'pre',
-        use: ['source-map-loader'],
+        use: [
+          {
+            loader: 'source-map-loader',
+            options: {
+              filterSourceMappingUrl: (_, resourcePath) => {
+                // ignores pkgs missing sourcemaps
+                return ['chardet', 'tokenize-ansi'].every((pkg) => !resourcePath.includes(pkg));
+              },
+            },
+          },
+        ],
       },
       {
         test: /\.js$/,
         exclude: /node_modules/,
-        use: [
-          'babel-loader',
-          'auto-ngtemplate-loader',
-          {
-            // enforce: 'pre',
-            loader: 'eslint-loader',
-          },
-        ],
+        use: ['babel-loader', 'auto-ngtemplate-loader'],
       },
       {
         test: /\.html$/,
@@ -60,7 +65,18 @@ module.exports = {
       },
     ],
   },
+  devServer: {
+    contentBase: path.join(__dirname, '.tmp'),
+    compress: true,
+    port: 8999,
+    proxy: {
+      '/api': 'http://localhost:9000',
+    },
+    open: true,
+    writeToDisk: true,
+  },
   plugins: [
+    new ESLintPlugin(),
     new HtmlWebpackPlugin({
       template: './app/index.html',
       templateParameters: {

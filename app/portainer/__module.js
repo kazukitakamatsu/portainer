@@ -1,5 +1,11 @@
 import _ from 'lodash-es';
 
+import './rbac';
+import componentsModule from './components';
+import settingsModule from './settings';
+import featureFlagModule from './feature-flags';
+import userActivityModule from './user-activity';
+
 async function initAuthentication(authManager, Authentication, $rootScope, $state) {
   authManager.checkAuthOnRefresh();
   // The unauthenticated event is broadcasted by the jwtInterceptor when
@@ -15,7 +21,7 @@ async function initAuthentication(authManager, Authentication, $rootScope, $stat
   return await Authentication.init();
 }
 
-angular.module('portainer.app', ['portainer.oauth']).config([
+angular.module('portainer.app', ['portainer.oauth', 'portainer.rbac', componentsModule, settingsModule, featureFlagModule, userActivityModule, 'portainer.shared.datatable']).config([
   '$stateRegistryProvider',
   function ($stateRegistryProvider) {
     'use strict';
@@ -48,6 +54,18 @@ angular.module('portainer.app', ['portainer.oauth']).config([
           controller: 'SidebarController',
         },
       },
+      resolve: {
+        featuresServiceInitialized: /* @ngInject */ function featuresServiceInitialized($async, featureService, Notifications) {
+          return $async(async () => {
+            try {
+              await featureService.init();
+            } catch (e) {
+              Notifications.error('Failed initializing features service', e);
+              throw e;
+            }
+          });
+        },
+      },
     };
 
     var endpointRoot = {
@@ -69,7 +87,7 @@ angular.module('portainer.app', ['portainer.oauth']).config([
 
               return endpoint;
             } catch (e) {
-              Notifications.error('Failed loading endpoint', e);
+              Notifications.error('Failed loading environment', e);
               $state.go('portainer.home', {}, { reload: true });
               return;
             }
@@ -248,6 +266,26 @@ angular.module('portainer.app', ['portainer.oauth']).config([
       },
     };
 
+    const wizard = {
+      name: 'portainer.wizard',
+      url: '/wizard',
+      views: {
+        'content@': {
+          component: 'wizardView',
+        },
+      },
+    };
+
+    const wizardEndpoints = {
+      name: 'portainer.wizard.endpoints',
+      url: '/endpoints',
+      views: {
+        'content@': {
+          component: 'wizardEndpoints',
+        },
+      },
+    };
+
     var initEndpoint = {
       name: 'portainer.init.endpoint',
       url: '/endpoint',
@@ -293,24 +331,12 @@ angular.module('portainer.app', ['portainer.oauth']).config([
       },
     };
 
-    var registryCreation = {
+    const registryCreation = {
       name: 'portainer.registries.new',
       url: '/new',
       views: {
         'content@': {
-          templateUrl: './views/registries/create/createregistry.html',
-          controller: 'CreateRegistryController',
-        },
-      },
-    };
-
-    var registryAccess = {
-      name: 'portainer.registries.registry.access',
-      url: '/access',
-      views: {
-        'content@': {
-          templateUrl: './views/registries/access/registryAccess.html',
-          controller: 'RegistryAccessController',
+          component: 'createRegistry',
         },
       },
     };
@@ -392,16 +418,6 @@ angular.module('portainer.app', ['portainer.oauth']).config([
       },
     };
 
-    var roles = {
-      name: 'portainer.roles',
-      url: '/roles',
-      views: {
-        'content@': {
-          templateUrl: './views/roles/roles.html',
-        },
-      },
-    };
-
     $stateRegistryProvider.register(root);
     $stateRegistryProvider.register(endpointRoot);
     $stateRegistryProvider.register(portainer);
@@ -419,11 +435,12 @@ angular.module('portainer.app', ['portainer.oauth']).config([
     $stateRegistryProvider.register(groupCreation);
     $stateRegistryProvider.register(home);
     $stateRegistryProvider.register(init);
+    $stateRegistryProvider.register(wizard);
+    $stateRegistryProvider.register(wizardEndpoints);
     $stateRegistryProvider.register(initEndpoint);
     $stateRegistryProvider.register(initAdmin);
     $stateRegistryProvider.register(registries);
     $stateRegistryProvider.register(registry);
-    $stateRegistryProvider.register(registryAccess);
     $stateRegistryProvider.register(registryCreation);
     $stateRegistryProvider.register(settings);
     $stateRegistryProvider.register(settingsAuthentication);
@@ -432,7 +449,6 @@ angular.module('portainer.app', ['portainer.oauth']).config([
     $stateRegistryProvider.register(user);
     $stateRegistryProvider.register(teams);
     $stateRegistryProvider.register(team);
-    $stateRegistryProvider.register(roles);
   },
 ]);
 
